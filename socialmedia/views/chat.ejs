@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title><%= title %> — Prism</title>
+  <link rel="stylesheet" href="/css/main.css" />
+</head>
+<body>
+<div class="app-layout">
+  <%- include('partials/nav') %>
+
+  <main class="main-content" style="margin: 0 auto; max-width: 960px; padding: 24px;">
+    <div class="chat-layout">
+
+      <!-- Sidebar: rooms -->
+      <div class="chat-sidebar">
+        <div class="chat-sidebar-header">
+          <div class="chat-sidebar-title">Messages</div>
+        </div>
+        <div class="chat-room-list" id="roomList">
+          <!-- Global room -->
+          <div class="chat-room-item active" id="room-global" onclick="switchRoom('global')">
+            <div style="width:42px;height:42px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:1.25rem;flex-shrink:0;">🌍</div>
+            <div class="chat-room-info">
+              <div class="chat-room-name">Global Chat</div>
+              <div class="chat-room-preview">Everyone's here</div>
+            </div>
+          </div>
+          <div id="dmRooms"></div>
+        </div>
+        <div style="padding:12px;border-top:1px solid var(--border);">
+          <div class="search-wrap" style="margin-bottom:0;">
+            <span class="search-icon">🔍</span>
+            <input type="text" class="search-input" id="dmSearch" placeholder="Search users..." />
+            <div class="search-results" id="dmSearchResults"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Main chat area -->
+      <div class="chat-main">
+        <div class="chat-header" id="chatHeader">
+          <div style="width:36px;height:36px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:1.125rem;">🌍</div>
+          <div>
+            <div style="font-weight:600;font-size:.9375rem;">Global Chat</div>
+            <div style="font-size:.75rem;color:var(--text-muted);" id="chatSubtitle">Open to everyone</div>
+          </div>
+        </div>
+        <div class="chat-messages" id="chatMessages">
+          <div style="text-align:center;color:var(--text-muted);font-size:.875rem;padding:40px 0;">Loading messages…</div>
+        </div>
+        <div class="chat-input-area">
+          <textarea class="chat-input" id="chatInput" placeholder="Send a message…" rows="1"
+            onkeydown="handleChatKey(event)" oninput="autoResize(this)" maxlength="1000"></textarea>
+          <button class="chat-send-btn" onclick="sendMessage()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/js/app.js"></script>
+<script>
+const CURRENT_USER = <%- JSON.stringify({ _id: currentUser._id, username: currentUser.username, avatar: currentUser.avatar }) %>;
+const URL_PARAMS = new URLSearchParams(window.location.search);
+let currentRoom = 'global';
+let onlineUsersMap = {};
+let dmUsers = {};
+
+const socket = io({ auth: { userId: CURRENT_USER._id } });
+
+// ── Room switching ─────────────────────────────────────────────
+async function switchRoom(roomId) {
+  currentRoom = roomId;
+  document.querySelectorAll('.chat-room-item').forEach(el => el.classList.remove('active'));
+  document.getElementById(`room-${roomId}`)?.classList.add('active');
+  document.getElementById('chatMessages').innerHTML = '<div style="text-align:center;color:var(--text-muted);font-size:.875rem;padding:40px 0;">Loading…</div>';
+
+  if (roomId === 'global') {
+    document.getElementById('chatHeader').innerHTML = `
+      <div style="width:36px;height:36px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:1.125rem;">🌍</div>
+      <div><div style="font-weight:600;font-size:.9375rem;">Global Chat</div><div style="font-size:.75rem;color:var(--text-muted);" id="chatSubtitle">Open to everyone</div></div>`;
+    await loadGlobalMessages();
+  } else {
+    const user = dmUsers[roomId];
+    if (user) {
+      const av = user.avatar
+        ? `<img src="/uploads/${user.avatar}" style="width:36px;height:36px;border-radius:50%;object-fit:cover;" />`
+        : `<div style="width:36px;height:36px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:700;color:white;font-size:.875rem;">${user.username[0].toUpperCase()}</div>`;
+      const isOnline = onlineUsersMap[roomId];
+      document.getElementById('chatHeader').innerHTML = `
+        ${av}<div>
+        <div style="font-weight:600;font-size:.9375rem;">${esc(user.username)}</div>
+        <div style="font-size:.75rem;color:${isOnline ? 'var(--success)' : 'var(--text-muted)'};">${isOnline ? '● Online' : 'Offline'}</div></div>`;
+    }
+    await loadDMMessages(roomId);
+  }
+}
+
+async function loadGlobalMessages() {
+  try {
+    const res = await fetch('/api/users/global/messages');
+    const data = await res.json();
+    const container = document.getElementById('chatMessages');
+    container.innerHTML = '';
+    if (!data.messages.length) {
+      container.innerHTML = '<div style="text-align:center;color:var(--text-muted);font-size:.875rem;padding:40px 0;">No messages yet. Say hello! 👋</div>';
+      return;
+    }
+    data.messages.forEach(msg => appendMessage(msg, false));
+    scrollToBottom();
+  } catch(e) { showToast('Error loading messages', 'error'); }
+}
+
+async function loadDMMessages(userId) {
+  try {
+    const res = await fetch(`/api/users/${userId}/messages`);
+    const data = await res.json();
+    const container = document.getElementById('chatMessages');
+    container.innerHTML = '';
+    if (!data.messages.length) {
+      container.innerHTML = '<div style="text-align:center;color:var(--text-muted);font-size:.875rem;padding:40px 0;">No messages yet. Start the conversation!</div>';
+      return;
+    }
+    data.messages.forEach(msg => appendMessage(msg, false));
+    scrollToBottom();
+  } catch(e) { showToast('Error loading messages', 'error'); }
+}
+
+function appendMessage(msg, scroll = true) {
+  const container = document.getElementById('chatMessages');
+  const emptyMsg = container.querySelector('div[style*="text-align:center"]');
+  if (emptyMsg) emptyMsg.remove();
+
+  const isOwn = msg.sender._id === CURRENT_USER._id || msg.sender === CURRENT_USER._id;
+  const sender = msg.sender;
+  const username = typeof sender === 'object' ? sender.username : '';
+  const avatar = typeof sender === 'object' ? sender.avatar : null;
+
+  const av = avatar
+    ? `<img src="/uploads/${avatar}" class="msg-avatar" />`
+    : `<div class="msg-avatar" style="display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.75rem;background:var(--accent);color:white;">${(username||'?')[0].toUpperCase()}</div>`;
+
+  const time = new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  const div = document.createElement('div');
+  div.className = `message-item ${isOwn ? 'own' : ''}`;
+  div.innerHTML = `
+    ${!isOwn ? av : ''}
+    <div>
+      ${!isOwn ? `<div class="msg-name">${esc(username)}</div>` : ''}
+      <div class="msg-bubble">${esc(msg.text)}</div>
+      <div class="msg-time">${time}</div>
+    </div>
+    ${isOwn ? av : ''}`;
+  container.appendChild(div);
+  if (scroll) scrollToBottom();
+}
+
+function sendMessage() {
+  const input = document.getElementById('chatInput');
+  const text = input.value.trim();
+  if (!text) return;
+  if (currentRoom === 'global') {
+    socket.emit('global_message', { text });
+  } else {
+    socket.emit('private_message', { text, receiverId: currentRoom });
+  }
+  input.value = '';
+  input.style.height = 'auto';
+}
+
+function handleChatKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+}
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+}
+function scrollToBottom() {
+  const c = document.getElementById('chatMessages');
+  c.scrollTop = c.scrollHeight;
+}
+
+// ── Socket events ──────────────────────────────────────────────
+socket.on('global_message', msg => {
+  if (currentRoom === 'global') { appendMessage(msg); }
+});
+
+socket.on('private_message', msg => {
+  const senderId = typeof msg.sender === 'object' ? msg.sender._id : msg.sender;
+  const otherId = senderId === CURRENT_USER._id ? msg.receiver : senderId;
+  if (currentRoom === otherId || currentRoom === senderId) { appendMessage(msg); }
+  if (!dmUsers[otherId]) {
+    const user = typeof msg.sender === 'object' ? msg.sender : { _id: otherId, username: 'User', avatar: null };
+    addDMRoom(user);
+  }
+});
+
+socket.on('online_users', users => {
+  onlineUsersMap = {};
+  users.forEach(u => { onlineUsersMap[u.id] = true; });
+  // update DM room indicators
+  Object.keys(dmUsers).forEach(uid => {
+    const dot = document.querySelector(`#room-${uid} .online-dot`);
+    if (dot) dot.style.display = onlineUsersMap[uid] ? 'block' : 'none';
+  });
+});
+
+// ── DM room management ─────────────────────────────────────────
+function addDMRoom(user) {
+  if (dmUsers[user._id]) return;
+  dmUsers[user._id] = user;
+  const av = user.avatar
+    ? `<img src="/uploads/${user.avatar}" class="chat-room-avatar" />`
+    : `<div class="chat-room-avatar" style="display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.875rem;background:var(--accent);color:white;">${user.username[0].toUpperCase()}</div>`;
+  const el = document.createElement('div');
+  el.className = 'chat-room-item';
+  el.id = `room-${user._id}`;
+  el.onclick = () => switchRoom(user._id);
+  el.innerHTML = `
+    <div style="position:relative;">${av}<span class="online-dot" style="display:${onlineUsersMap[user._id] ? 'block' : 'none'};"></span></div>
+    <div class="chat-room-info">
+      <div class="chat-room-name">${esc(user.username)}</div>
+      <div class="chat-room-preview">Click to chat</div>
+    </div>`;
+  document.getElementById('dmRooms').appendChild(el);
+}
+
+// ── DM search ──────────────────────────────────────────────────
+let searchTimeout;
+document.getElementById('dmSearch').addEventListener('input', function() {
+  clearTimeout(searchTimeout);
+  const q = this.value.trim();
+  if (!q) { document.getElementById('dmSearchResults').classList.remove('show'); return; }
+  searchTimeout = setTimeout(() => searchDMUsers(q), 300);
+});
+document.addEventListener('click', e => {
+  if (!e.target.closest('#dmSearch') && !e.target.closest('#dmSearchResults')) {
+    document.getElementById('dmSearchResults').classList.remove('show');
+  }
+});
+
+async function searchDMUsers(q) {
+  try {
+    const res = await fetch(`/api/users/search?q=${encodeURIComponent(q)}`);
+    const data = await res.json();
+    const box = document.getElementById('dmSearchResults');
+    if (!data.users.length) { box.classList.remove('show'); return; }
+    box.innerHTML = data.users.map(u => {
+      const av = u.avatar
+        ? `<img src="/uploads/${u.avatar}" class="search-result-avatar" />`
+        : `<div class="search-result-avatar" style="display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.875rem;background:var(--accent);color:white;">${u.username[0].toUpperCase()}</div>`;
+      return `<div class="search-result-item" onclick="startDM(${JSON.stringify(u).replace(/"/g,'&quot;')})">${av}<div><div style="font-weight:500;font-size:.9375rem;">${esc(u.username)}</div></div></div>`;
+    }).join('');
+    box.classList.add('show');
+  } catch(e) {}
+}
+
+function startDM(user) {
+  document.getElementById('dmSearchResults').classList.remove('show');
+  document.getElementById('dmSearch').value = '';
+  addDMRoom(user);
+  switchRoom(user._id);
+}
+
+// ── Init ───────────────────────────────────────────────────────
+const dmParam = URL_PARAMS.get('dm');
+if (dmParam) {
+  fetch(`/api/users/${dmParam}`)
+    .then(r => r.json())
+    .then(data => { if (data.success) { addDMRoom(data.user); switchRoom(dmParam); } });
+} else {
+  loadGlobalMessages();
+}
+</script>
+</body>
+</html>

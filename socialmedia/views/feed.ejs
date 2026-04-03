@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title><%= title %> — Prism</title>
+  <link rel="stylesheet" href="/css/main.css" />
+</head>
+<body>
+<div class="app-layout">
+  <%- include('partials/nav') %>
+
+  <main class="main-content" style="margin: 0 auto; padding-top: 32px;">
+
+    <!-- New Post Modal -->
+    <div class="modal-overlay" id="newPostModal">
+      <div class="modal">
+        <div class="modal-header">
+          <h2 class="modal-title">New Post</h2>
+          <button class="modal-close" onclick="closeModal('newPostModal')">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="upload-zone" id="uploadZone">
+            <input type="file" id="imageInput" accept="image/*" />
+            <div class="upload-icon">📷</div>
+            <div class="upload-text">Click or drag an image here</div>
+            <div class="upload-subtext">JPEG, PNG, WebP up to 5MB</div>
+          </div>
+          <div id="imagePreviewWrap" style="display:none;" class="image-preview">
+            <img id="imagePreview" src="" alt="Preview" />
+            <button class="remove-btn" onclick="clearImage()">✕</button>
+          </div>
+          <div class="form-group" style="margin-top:16px;">
+            <label class="form-label">Caption</label>
+            <textarea class="form-input" id="captionInput" placeholder="Write a caption..." rows="3" maxlength="2200"></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-outline" onclick="closeModal('newPostModal')">Cancel</button>
+          <button class="btn btn-primary" id="postSubmitBtn" onclick="submitPost()">
+            Share Post
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Feed -->
+    <div id="feedContainer">
+      <div class="loading-posts" id="loadingSkeleton">
+        <% for(let i=0; i<3; i++) { %>
+        <div class="skeleton-post card">
+          <div class="skeleton-header">
+            <div class="skeleton skeleton-circle"></div>
+            <div class="skeleton-lines">
+              <div class="skeleton skeleton-line" style="width:40%"></div>
+              <div class="skeleton skeleton-line" style="width:25%"></div>
+            </div>
+          </div>
+          <div class="skeleton skeleton-image"></div>
+        </div>
+        <% } %>
+      </div>
+    </div>
+    <div id="loadMoreWrap" style="text-align:center;padding:20px;display:none;">
+      <button class="btn btn-outline" id="loadMoreBtn" onclick="loadMorePosts()">Load More</button>
+    </div>
+    <div id="endOfFeed" style="text-align:center;padding:40px;color:var(--text-muted);display:none;">
+      You've seen all posts ✨
+    </div>
+
+  </main>
+
+  <!-- Right panel -->
+  <aside class="right-panel">
+    <div class="search-wrap">
+      <span class="search-icon">🔍</span>
+      <input type="text" class="search-input" id="searchInput" placeholder="Search users..." />
+      <div class="search-results" id="searchResults"></div>
+    </div>
+    <div class="card" style="padding:16px;">
+      <h3 style="margin-bottom:12px;font-size:.9375rem;">Online Now</h3>
+      <div id="onlineList" style="display:flex;flex-direction:column;gap:10px;"></div>
+    </div>
+  </aside>
+</div>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/js/app.js"></script>
+<script>
+const CURRENT_USER = <%- JSON.stringify({ _id: currentUser._id, username: currentUser.username, avatar: currentUser.avatar }) %>;
+
+let page = 1;
+let loading = false;
+let hasMore = true;
+
+async function loadPosts(reset = false) {
+  if (loading || (!hasMore && !reset)) return;
+  loading = true;
+  if (reset) { page = 1; hasMore = true; document.getElementById('feedContainer').innerHTML = ''; }
+
+  try {
+    const res = await fetch(`/api/posts?page=${page}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message);
+
+    document.getElementById('loadingSkeleton')?.remove();
+    const container = document.getElementById('feedContainer');
+
+    if (data.posts.length === 0 && page === 1) {
+      container.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📸</div><h3>No posts yet</h3><p>Be the first to share something!</p></div>`;
+    } else {
+      data.posts.forEach(post => container.appendChild(renderPost(post)));
+    }
+
+    hasMore = data.hasMore;
+    page++;
+    document.getElementById('loadMoreWrap').style.display = hasMore ? 'block' : 'none';
+    document.getElementById('endOfFeed').style.display = (!hasMore && page > 2) ? 'block' : 'none';
+  } catch (err) {
+    showToast('Failed to load posts', 'error');
+  } finally {
+    loading = false;
+  }
+}
+
+function loadMorePosts() { loadPosts(); }
+
+function renderPost(post) {
+  const div = document.createElement('div');
+  div.className = 'post-card';
+  div.id = `post-${post._id}`;
+  const avatarHtml = post.user.avatar
+    ? `<img src="/uploads/${post.user.avatar}" class="post-avatar" alt="${post.user.username}" />`
+    : `<div class="post-avatar" style="display:flex;align-items:center;justify-content:center;font-weight:700;background:var(--accent);color:white;">${post.user.username[0].toUpperCase()}</div>`;
+  const commentsHtml = (post.comments || []).slice(-3).map(c => {
+    const cAv = c.user?.avatar
+      ? `<img src="/uploads/${c.user.avatar}" class="comment-avatar" />`
+      : `<div class="comment-avatar" style="display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.75rem;background:var(--accent);color:white;">${(c.user?.username||'?')[0].toUpperCase()}</div>`;
+    return `<div class="comment-item">${cAv}<div class="comment-body"><span class="comment-username">${esc(c.user?.username||'')}</span><span class="comment-text">${esc(c.text)}</span></div></div>`;
+  }).join('');
+
+  div.innerHTML = `
+    <div class="post-header">
+      <a href="/profile/${post.user._id}">${avatarHtml}</a>
+      <div class="post-user-info">
+        <a href="/profile/${post.user._id}" class="post-username">${esc(post.user.username)}</a>
+        <div class="post-time">${timeAgo(post.createdAt)}</div>
+      </div>
+      ${post.isOwner ? `<button class="btn btn-ghost btn-sm" onclick="deletePost('${post._id}')" style="color:var(--danger);">🗑</button>` : ''}
+    </div>
+    <div class="post-image-wrap">
+      <img src="/uploads/${post.image}" class="post-image" alt="Post" loading="lazy" />
+    </div>
+    <div class="post-actions">
+      <button class="action-btn ${post.isLiked ? 'liked' : ''}" id="like-${post._id}" onclick="toggleLike('${post._id}')">
+        <svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="${post.isLiked ? 'currentColor' : 'none'}"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+        <span id="likeCount-${post._id}">${post.likesCount}</span>
+      </button>
+      <button class="action-btn" onclick="toggleComments('${post._id}')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+        <span>${post.commentsCount}</span>
+      </button>
+    </div>
+    ${post.caption ? `<div class="post-caption"><strong>${esc(post.user.username)}</strong>${esc(post.caption)}</div>` : ''}
+    <div class="comments-section" id="comments-${post._id}" style="display:none;">
+      <div id="commentsList-${post._id}">${commentsHtml}</div>
+      <div class="comment-form">
+        <input class="comment-input" type="text" placeholder="Add a comment…" id="commentInput-${post._id}"
+          onkeydown="if(event.key==='Enter'){submitComment('${post._id}');event.preventDefault();}" maxlength="500"/>
+        <button class="btn btn-ghost btn-sm" onclick="submitComment('${post._id}')">Post</button>
+      </div>
+    </div>`;
+  return div;
+}
+
+function toggleComments(postId) {
+  const el = document.getElementById(`comments-${postId}`);
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+async function toggleLike(postId) {
+  try {
+    const res = await fetch(`/api/posts/${postId}/like`, { method: 'POST' });
+    const data = await res.json();
+    if (!data.success) return;
+    const btn = document.getElementById(`like-${postId}`);
+    const svg = btn.querySelector('svg path');
+    const count = document.getElementById(`likeCount-${postId}`);
+    btn.classList.toggle('liked', data.liked);
+    svg.setAttribute('fill', data.liked ? 'currentColor' : 'none');
+    count.textContent = data.likesCount;
+  } catch(e) { showToast('Error', 'error'); }
+}
+
+async function submitComment(postId) {
+  const input = document.getElementById(`commentInput-${postId}`);
+  const text = input.value.trim();
+  if (!text) return;
+  try {
+    const res = await fetch(`/api/posts/${postId}/comment`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text })
+    });
+    const data = await res.json();
+    if (!data.success) return showToast(data.message, 'error');
+    const c = data.comment;
+    const list = document.getElementById(`commentsList-${postId}`);
+    const avatarHtml = c.user?.avatar
+      ? `<img src="/uploads/${c.user.avatar}" class="comment-avatar" />`
+      : `<div class="comment-avatar" style="display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.75rem;background:var(--accent);color:white;">${(c.user?.username||'?')[0].toUpperCase()}</div>`;
+    list.insertAdjacentHTML('beforeend', `<div class="comment-item">${avatarHtml}<div class="comment-body"><span class="comment-username">${esc(c.user?.username||'')}</span><span class="comment-text">${esc(c.text)}</span></div></div>`);
+    input.value = '';
+  } catch(e) { showToast('Error posting comment', 'error'); }
+}
+
+async function deletePost(postId) {
+  if (!confirm('Delete this post?')) return;
+  try {
+    const res = await fetch(`/api/posts/${postId}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.success) {
+      document.getElementById(`post-${postId}`)?.remove();
+      showToast('Post deleted', 'success');
+    }
+  } catch(e) { showToast('Error deleting post', 'error'); }
+}
+
+// ── New post upload ────────────────────────────────────────────
+let selectedFile = null;
+const uploadZone = document.getElementById('uploadZone');
+const imageInput = document.getElementById('imageInput');
+
+imageInput.addEventListener('change', e => { if (e.target.files[0]) showPreview(e.target.files[0]); });
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('drag-over'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag-over'));
+uploadZone.addEventListener('drop', e => {
+  e.preventDefault(); uploadZone.classList.remove('drag-over');
+  const f = e.dataTransfer.files[0];
+  if (f && f.type.startsWith('image/')) showPreview(f);
+});
+
+function showPreview(file) {
+  selectedFile = file;
+  const reader = new FileReader();
+  reader.onload = e => {
+    document.getElementById('imagePreview').src = e.target.result;
+    document.getElementById('imagePreviewWrap').style.display = 'block';
+    document.getElementById('uploadZone').style.display = 'none';
+  };
+  reader.readAsDataURL(file);
+}
+function clearImage() {
+  selectedFile = null;
+  imageInput.value = '';
+  document.getElementById('imagePreviewWrap').style.display = 'none';
+  document.getElementById('uploadZone').style.display = 'block';
+}
+
+async function submitPost() {
+  if (!selectedFile) return showToast('Please select an image', 'error');
+  const btn = document.getElementById('postSubmitBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Sharing...';
+  const formData = new FormData();
+  formData.append('image', selectedFile);
+  formData.append('caption', document.getElementById('captionInput').value.trim());
+  try {
+    const res = await fetch('/api/posts', { method: 'POST', body: formData });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message);
+    closeModal('newPostModal');
+    clearImage();
+    document.getElementById('captionInput').value = '';
+    showToast('Post shared! 🎉', 'success');
+    loadPosts(true);
+  } catch(e) {
+    showToast(e.message || 'Error sharing post', 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = 'Share Post';
+  }
+}
+
+// ── Search ─────────────────────────────────────────────────────
+let searchTimeout;
+document.getElementById('searchInput').addEventListener('input', function() {
+  clearTimeout(searchTimeout);
+  const q = this.value.trim();
+  if (!q) { document.getElementById('searchResults').classList.remove('show'); return; }
+  searchTimeout = setTimeout(() => searchUsers(q), 300);
+});
+document.addEventListener('click', e => {
+  if (!e.target.closest('.search-wrap')) document.getElementById('searchResults').classList.remove('show');
+});
+
+async function searchUsers(q) {
+  try {
+    const res = await fetch(`/api/users/search?q=${encodeURIComponent(q)}`);
+    const data = await res.json();
+    const box = document.getElementById('searchResults');
+    if (!data.users.length) { box.classList.remove('show'); return; }
+    box.innerHTML = data.users.map(u => {
+      const av = u.avatar
+        ? `<img src="/uploads/${u.avatar}" class="search-result-avatar" />`
+        : `<div class="search-result-avatar" style="display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.875rem;background:var(--accent);color:white;">${u.username[0].toUpperCase()}</div>`;
+      return `<div class="search-result-item" onclick="window.location='/profile/${u._id}'">${av}<div><div style="font-weight:500;font-size:.9375rem;">${esc(u.username)}</div><div style="font-size:.8125rem;color:var(--text-muted);">${esc(u.bio||'')}</div></div></div>`;
+    }).join('');
+    box.classList.add('show');
+  } catch(e) {}
+}
+
+// ── Socket / Online users ──────────────────────────────────────
+const socket = io({ auth: { userId: CURRENT_USER._id } });
+socket.on('online_users', users => {
+  const list = document.getElementById('onlineList');
+  const others = users.filter(u => u.id !== CURRENT_USER._id);
+  if (!others.length) { list.innerHTML = '<div style="color:var(--text-muted);font-size:.875rem;">No one else online</div>'; return; }
+  list.innerHTML = others.slice(0, 8).map(u => {
+    const av = u.avatar
+      ? `<img src="/uploads/${u.avatar}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;" />`
+      : `<div style="width:32px;height:32px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.75rem;color:white;">${u.username[0].toUpperCase()}</div>`;
+    return `<div style="display:flex;align-items:center;gap:10px;cursor:pointer;" onclick="window.location='/profile/${u.id}'">${av}<span style="font-size:.875rem;font-weight:500;">${esc(u.username)}</span><span style="width:8px;height:8px;border-radius:50%;background:var(--success);margin-left:auto;flex-shrink:0;"></span></div>`;
+  }).join('');
+});
+
+loadPosts();
+</script>
+</body>
+</html>

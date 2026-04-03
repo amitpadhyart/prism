@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title><%= title %> — Prism</title>
+  <link rel="stylesheet" href="/css/main.css" />
+</head>
+<body>
+<div class="auth-page">
+  <div class="auth-card">
+    <div class="auth-logo">Pr<span>i</span>sm</div>
+    <p class="auth-subtitle">Share your world, one photo at a time</p>
+
+    <% if (error) { %>
+      <div class="error-banner">⚠️ <%= error %></div>
+    <% } %>
+
+    <form action="/signup" method="POST" id="signupForm">
+      <div class="form-group">
+        <label class="form-label" for="username">Username</label>
+        <input class="form-input" type="text" id="username" name="username"
+          placeholder="your_username" autocomplete="username" required
+          pattern="^[a-zA-Z0-9_]{3,30}$" minlength="3" maxlength="30" />
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="email">Email</label>
+        <input class="form-input" type="email" id="email" name="email"
+          placeholder="you@example.com" autocomplete="email" required />
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="password">Password</label>
+        <div style="position:relative;">
+          <input class="form-input" type="password" id="password" name="password"
+            placeholder="Min. 6 characters" autocomplete="new-password" required minlength="6" />
+          <button type="button" class="toggle-pw" onclick="togglePw('password')"
+            style="position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:1rem;">👁</button>
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary btn-full" id="submitBtn">
+        Create Account
+      </button>
+    </form>
+    <p class="auth-footer">Already have an account? <a class="auth-link" href="/login">Sign in</a></p>
+  </div>
+</div>
+<script>
+function togglePw(id) {
+  const input = document.getElementById(id);
+  input.type = input.type === 'password' ? 'text' : 'password';
+}
+document.getElementById('signupForm').addEventListener('submit', function() {
+  const btn = document.getElementById('submitBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Creating...';
+});
+</script>
+</body>
+</html>

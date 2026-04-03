@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title><%= title %> — Prism</title>
+  <link rel="stylesheet" href="/css/main.css" />
+</head>
+<body>
+<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;text-align:center;padding:24px;">
+  <div style="font-size:5rem;opacity:.4;"><%= code === 404 ? '🔍' : '⚠️' %></div>
+  <h1 style="font-size:4rem;font-weight:700;color:var(--text-muted);"><%= code %></h1>
+  <h2><%= message %></h2>
+  <a href="/feed" class="btn btn-primary" style="margin-top:8px;">Back to Feed</a>
+</div>
+</body>
+</html>

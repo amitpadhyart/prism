@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title><%= title %> — Prism</title>
+  <link rel="stylesheet" href="/css/main.css" />
+</head>
+<body>
+<div class="app-layout">
+  <%- include('partials/nav') %>
+
+  <main class="main-content" style="margin: 0 auto; max-width: 800px;">
+
+    <!-- Edit Profile Modal -->
+    <div class="modal-overlay" id="editProfileModal">
+      <div class="modal">
+        <div class="modal-header">
+          <h2 class="modal-title">Edit Profile</h2>
+          <button class="modal-close" onclick="closeModal('editProfileModal')">✕</button>
+        </div>
+        <div class="modal-body">
+          <div style="text-align:center;margin-bottom:20px;">
+            <div id="avatarPreviewWrap" style="display:inline-block;position:relative;">
+              <div id="editAvatarDisplay" style="width:80px;height:80px;border-radius:50%;overflow:hidden;margin:0 auto 12px;background:var(--surface3);display:flex;align-items:center;justify-content:center;font-size:1.75rem;font-weight:700;color:white;cursor:pointer;"></div>
+              <input type="file" id="avatarFileInput" accept="image/*" style="display:none;" />
+              <button type="button" onclick="document.getElementById('avatarFileInput').click()" class="btn btn-outline btn-sm">Change Photo</button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Bio</label>
+            <textarea class="form-input" id="editBio" placeholder="Tell people about yourself..." rows="3" maxlength="200"></textarea>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Website</label>
+            <input class="form-input" type="url" id="editWebsite" placeholder="https://yoursite.com" />
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-outline" onclick="closeModal('editProfileModal')">Cancel</button>
+          <button class="btn btn-primary" onclick="saveProfile()">Save Changes</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Delete Account Modal -->
+    <div class="modal-overlay" id="deleteAccountModal">
+      <div class="modal">
+        <div class="modal-header">
+          <h2 class="modal-title" style="color:var(--danger);">Delete Account</h2>
+          <button class="modal-close" onclick="closeModal('deleteAccountModal')">✕</button>
+        </div>
+        <div class="modal-body">
+          <p style="color:var(--text-dim);margin-bottom:16px;">This will permanently delete your account, all your posts, and messages. This cannot be undone.</p>
+          <p style="font-weight:600;">Are you absolutely sure?</p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-outline" onclick="closeModal('deleteAccountModal')">Cancel</button>
+          <button class="btn btn-danger" onclick="deleteAccount()">Yes, Delete Everything</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Post Detail Modal -->
+    <div class="modal-overlay" id="postDetailModal">
+      <div class="modal" style="max-width:700px;">
+        <div class="modal-header">
+          <h2 class="modal-title">Post</h2>
+          <button class="modal-close" onclick="closeModal('postDetailModal')">✕</button>
+        </div>
+        <div class="modal-body" id="postDetailBody" style="padding:0;"></div>
+      </div>
+    </div>
+
+    <div id="profileContainer">
+      <div style="padding:40px;text-align:center;color:var(--text-muted);"><span class="spinner"></span></div>
+    </div>
+
+  </main>
+</div>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/js/app.js"></script>
+<script>
+const CURRENT_USER = <%- JSON.stringify({ _id: currentUser._id, username: currentUser.username, avatar: currentUser.avatar }) %>;
+const PROFILE_ID = '<%= profileId %>';
+let profileData = null;
+let avatarFile = null;
+
+const socket = io({ auth: { userId: CURRENT_USER._id } });
+
+async function loadProfile() {
+  try {
+    const res = await fetch(`/api/users/${PROFILE_ID}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message);
+    profileData = data;
+    renderProfile(data);
+  } catch(e) {
+    document.getElementById('profileContainer').innerHTML = `<div class="empty-state"><div class="empty-state-icon">❌</div><h3>Profile not found</h3></div>`;
+  }
+}
+
+function renderProfile(data) {
+  const { user, posts } = data;
+  const isMe = user.isMe;
+  const avatarHtml = user.avatar
+    ? `<img src="/uploads/${user.avatar}" class="profile-avatar" id="profileAvatarImg" />`
+    : `<div class="profile-avatar" id="profileAvatarImg" style="display:flex;align-items:center;justify-content:center;font-size:2rem;font-weight:700;background:var(--accent);color:white;">${user.username[0].toUpperCase()}</div>`;
+
+  const actionsHtml = isMe
+    ? `<button class="btn btn-outline btn-sm" onclick="openEditProfile()">Edit Profile</button>
+       <button class="btn btn-ghost btn-sm" style="color:var(--danger);" onclick="openModal('deleteAccountModal')">Delete Account</button>`
+    : `<button class="btn ${user.isFollowing ? 'btn-outline' : 'btn-primary'} btn-sm" id="followBtn" onclick="toggleFollow('${user._id}')">
+         ${user.isFollowing ? 'Following' : 'Follow'}
+       </button>
+       <a href="/chat?dm=${user._id}" class="btn btn-outline btn-sm">Message</a>`;
+
+  const gridHtml = posts.length
+    ? posts.map(p => `
+      <div class="profile-grid-item" onclick="showPostDetail(${JSON.stringify(p).replace(/"/g,'&quot;')})">
+        <img src="/uploads/${p.image}" alt="" loading="lazy" />
+        <div class="profile-grid-overlay">
+          ❤️ ${p.likesCount} &nbsp; 💬 ${p.commentsCount}
+        </div>
+      </div>`).join('')
+    : `<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text-muted);">No posts yet</div>`;
+
+  document.getElementById('profileContainer').innerHTML = `
+    <div class="profile-header">
+      <div class="profile-avatar-wrap">${avatarHtml}</div>
+      <div class="profile-info">
+        <div class="profile-username">${esc(user.username)}</div>
+        ${user.bio ? `<div class="profile-bio">${esc(user.bio)}</div>` : ''}
+        ${user.website ? `<div style="margin-top:6px;"><a href="${esc(user.website)}" target="_blank" style="color:var(--accent);font-size:.875rem;">${esc(user.website)}</a></div>` : ''}
+        <div class="profile-stats">
+          <div class="stat-item"><div class="stat-value">${posts.length}</div><div class="stat-label">Posts</div></div>
+          <div class="stat-item"><div class="stat-value">${user.followersCount}</div><div class="stat-label">Followers</div></div>
+          <div class="stat-item"><div class="stat-value">${user.followingCount}</div><div class="stat-label">Following</div></div>
+        </div>
+        <div class="profile-actions">${actionsHtml}</div>
+      </div>
+    </div>
+    <div class="profile-grid">${gridHtml}</div>`;
+}
+
+async function toggleFollow(userId) {
+  try {
+    const res = await fetch(`/api/users/${userId}/follow`, { method: 'POST' });
+    const data = await res.json();
+    if (!data.success) return showToast(data.message, 'error');
+    const btn = document.getElementById('followBtn');
+    btn.textContent = data.isFollowing ? 'Following' : 'Follow';
+    btn.className = `btn ${data.isFollowing ? 'btn-outline' : 'btn-primary'} btn-sm`;
+    showToast(data.isFollowing ? 'Following!' : 'Unfollowed', 'success');
+  } catch(e) { showToast('Error', 'error'); }
+}
+
+function openEditProfile() {
+  const user = profileData.user;
+  document.getElementById('editBio').value = user.bio || '';
+  document.getElementById('editWebsite').value = user.website || '';
+  const avatarDisplay = document.getElementById('editAvatarDisplay');
+  if (user.avatar) {
+    avatarDisplay.innerHTML = `<img src="/uploads/${user.avatar}" style="width:100%;height:100%;object-fit:cover;" />`;
+  } else {
+    avatarDisplay.style.background = 'var(--accent)';
+    avatarDisplay.textContent = user.username[0].toUpperCase();
+  }
+  openModal('editProfileModal');
+}
+
+document.getElementById('avatarFileInput').addEventListener('change', function(e) {
+  avatarFile = e.target.files[0];
+  if (!avatarFile) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    const d = document.getElementById('editAvatarDisplay');
+    d.innerHTML = `<img src="${ev.target.result}" style="width:100%;height:100%;object-fit:cover;" />`;
+  };
+  reader.readAsDataURL(avatarFile);
+});
+
+async function saveProfile() {
+  const formData = new FormData();
+  formData.append('bio', document.getElementById('editBio').value.trim());
+  formData.append('website', document.getElementById('editWebsite').value.trim());
+  if (avatarFile) formData.append('avatar', avatarFile);
+  try {
+    const res = await fetch('/api/users/me', { method: 'PUT', body: formData });
+    const data = await res.json();
+    if (!data.success) return showToast(data.message, 'error');
+    closeModal('editProfileModal');
+    showToast('Profile updated!', 'success');
+    avatarFile = null;
+    loadProfile();
+  } catch(e) { showToast('Error saving profile', 'error'); }
+}
+
+async function deleteAccount() {
+  try {
+    const res = await fetch('/api/users/me', { method: 'DELETE' });
+    const data = await res.json();
+    if (data.success) window.location = '/signup';
+  } catch(e) { showToast('Error deleting account', 'error'); }
+}
+
+function showPostDetail(post) {
+  const avatarHtml = post.user?.avatar
+    ? `<img src="/uploads/${post.user.avatar}" class="post-avatar" />`
+    : `<div class="post-avatar" style="display:flex;align-items:center;justify-content:center;font-weight:700;background:var(--accent);color:white;">${(post.user?.username||'?')[0].toUpperCase()}</div>`;
+  const commentsHtml = (post.comments||[]).map(c =>
+    `<div class="comment-item"><div class="comment-body"><span class="comment-username">${esc(c.user?.username||'')}</span><span class="comment-text">${esc(c.text)}</span></div></div>`
+  ).join('');
+
+  document.getElementById('postDetailBody').innerHTML = `
+    <img src="/uploads/${post.image}" style="width:100%;max-height:500px;object-fit:cover;" />
+    <div style="padding:16px;">
+      <div class="post-header" style="padding:0 0 12px;">
+        ${avatarHtml}
+        <div class="post-user-info">
+          <div class="post-username">${esc(post.user?.username||'')}</div>
+          <div class="post-time">${timeAgo(post.createdAt)}</div>
+        </div>
+      </div>
+      ${post.caption ? `<p style="margin-bottom:12px;color:var(--text-dim);">${esc(post.caption)}</p>` : ''}
+      <div style="display:flex;gap:16px;margin-bottom:12px;">
+        <span>❤️ ${post.likesCount} likes</span>
+        <span>💬 ${post.commentsCount} comments</span>
+      </div>
+      <div style="border-top:1px solid var(--border);padding-top:12px;">${commentsHtml||'<span style="color:var(--text-muted);font-size:.875rem;">No comments yet</span>'}</div>
+    </div>`;
+  openModal('postDetailModal');
+}
+
+loadProfile();
+</script>
+</body>
+</html>
